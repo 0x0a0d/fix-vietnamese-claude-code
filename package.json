@@ -1,0 +1,29 @@
+{
+  "name": "fix-vietnamese-claude-code",
+  "version": "1.0.2",
+  "description": "Fix Vietnamese IME compatibility issues in Claude Code.",
+  "bin": {
+    "fix-vietnamese-claude-code": "patch-cli-claude-code.js"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "vietnamese",
+    "fix"
+  ],
+  "author": "0x0a0d",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0x0a0d/fix-vietnamese-claude-code.git"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.17"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "files": [
+    "patch-cli-claude-code.js"
+  ]
+}
