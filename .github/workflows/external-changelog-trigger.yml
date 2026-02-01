@@ -1,0 +1,219 @@
+name: External Changelog Monitor
+
+on:
+  schedule:
+    - cron: '30 */3 * * *' # Run every 3 hours (at minute 30)
+  workflow_dispatch: # Allow manual trigger
+    inputs:
+      force:
+        description: "Force re-run tests even if version hasn't changed"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    name: Check for new version
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      version: ${{ steps.compare.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for branch checking
+
+      - name: Get current version
+        id: old-version
+        run: |
+          # Try to get the version from the ci-state branch
+          if git rev-parse --verify origin/ci-state >/dev/null 2>&1; then
+            VERSION=$(git show origin/ci-state:external/claude-code-version.txt 2>/dev/null || echo "0.0.0")
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "Current version (from ci-state): $VERSION"
+          else
+            echo "version=0.0.0" >> $GITHUB_OUTPUT
+            echo "No previous version found (ci-state branch does not exist)."
+          fi
+
+      - name: Fetch Remote CHANGELOG
+        run: |
+          curl -sL https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md -o remote_changelog.md || (echo "Failed to fetch" && exit 1)
+
+      - name: Extract New Version
+        id: new-version
+        run: |
+          VERSION=$(grep -m 1 '^## ' remote_changelog.md | sed 's/## //')
+          if [ -z "$VERSION" ]; then
+            echo "Could not parse version from CHANGELOG"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Newest version found: $VERSION"
+
+      - name: Compare Versions
+        id: compare
+        run: |
+          OLD="${{ steps.old-version.outputs.version }}"
+          NEW="${{ steps.new-version.outputs.version }}"
+          FORCE="${{ github.event.inputs.force }}"
+          echo "version=$NEW" >> $GITHUB_OUTPUT
+          if [ "$OLD" != "$NEW" ] || [ "$FORCE" = "true" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Proceeding with version $NEW (Force: $FORCE)"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No version change and force is false."
+          fi
+
+  update-and-test:
+    name: Run tests and update documentation
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Code Match Cache
+        id: code-cache
+        uses: actions/cache@v4
+        with:
+          path: .code-check
+          key: code-v1-${{ hashFiles('patch-cli-claude-code.js', 'patch-cli-claude-code.test.js') }}
+
+      - name: Version Test Cache
+        id: test-cache
+        uses: actions/cache@v4
+        with:
+          path: .test-cache
+          key: test-v1-${{ hashFiles('patch-cli-claude-code.js', 'patch-cli-claude-code.test.js') }}-${{ needs.check-version.outputs.version }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Determine Test Scope
+        id: scope
+        run: |
+          NEW_VERSION="${{ needs.check-version.outputs.version }}"
+          FORCE="${{ github.event.inputs.force }}"
+          
+          if [ "$FORCE" = "true" ]; then
+            echo "mode=FULL" >> $GITHUB_OUTPUT
+            echo "reason=Force re-run requested" >> $GITHUB_OUTPUT
+          elif [ "${{ steps.test-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "mode=SKIP" >> $GITHUB_OUTPUT
+            echo "reason=This exact version and code already passed" >> $GITHUB_OUTPUT
+          elif [ "${{ steps.code-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "mode=PARTIAL" >> $GITHUB_OUTPUT
+            echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+            echo "reason=Code unchanged, testing only new version $NEW_VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "mode=FULL" >> $GITHUB_OUTPUT
+            echo "reason=Code changed or no previous success found, running full regression" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run Tests
+        id: tests
+        if: steps.scope.outputs.mode != 'SKIP'
+        env:
+          ONLY_VERSION: ${{ steps.scope.outputs.mode == 'PARTIAL' && steps.scope.outputs.version || '' }}
+        run: |
+          echo "Reason: ${{ steps.scope.outputs.reason }}"
+          if npm test; then
+            echo "status=PASSED" >> $GITHUB_OUTPUT
+            echo "emoji=✅" >> $GITHUB_OUTPUT
+            # Save success marker for this code
+            mkdir -p .code-check
+            echo "PASSED" > .code-check/status
+          else
+            echo "status=FAILED" >> $GITHUB_OUTPUT
+            echo "emoji=❌" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Set cache status for skipped tests
+        if: steps.scope.outputs.mode == 'SKIP'
+        run: |
+          echo "status=PASSED" >> $GITHUB_OUTPUT
+          echo "emoji=✅ (Cached)" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Update README.md
+        if: steps.tests.outputs.status == 'PASSED'
+        run: |
+          NEW_VERSION="${{ needs.check-version.outputs.version }}"
+          # Update "Tested version" line and add reference link if missing
+          sed -i "s/\*\*Phiên bản đã test:\*\* Claude Code v.*/\*\*Phiên bản đã test:\*\* Claude Code v2.0.64 → v$NEW_VERSION (Chi tiết tại [CHANGELOG.md](\/CHANGELOG.md))/" README.md
+
+      - name: Update local CHANGELOG.md
+        run: |
+          VERSION="${{ needs.check-version.outputs.version }}"
+          STATUS="${{ steps.tests.outputs.status }}"
+          EMOJI="${{ steps.tests.outputs.emoji }}"
+          DATE=$(date +'%Y-%m-%d')
+          
+          if [ ! -f CHANGELOG.md ]; then
+            echo "# Local Changelog & Testing State" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            echo "Automated testing history for new Claude Code versions." >> CHANGELOG.md
+            echo "" >> CHANGELOG.md
+          fi
+          
+          # Insert test info after line 4 (header and description)
+          sed -i "4a- [$DATE] Version $VERSION: $STATUS $EMOJI (Automated)" CHANGELOG.md
+
+      - name: Commit and Push Main
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md CHANGELOG.md
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit in main"
+          else
+            git commit -m "chore: update test results for Claude Code v${{ needs.check-version.outputs.version }}"
+            git push origin main
+          fi
+
+      - name: Update ci-state branch
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Create a temporary directory for ci-state branch
+          WORK_DIR=$(mktemp -d)
+          cd $WORK_DIR
+          git init
+          git remote add origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          
+          # Try to fetch ci-state branch, create if not exists (orphan)
+          if git fetch origin ci-state --depth=1; then
+            git checkout ci-state
+          else
+            git checkout --orphan ci-state
+            git rm -rf . --quiet || true
+          fi
+          
+          mkdir -p external
+          echo "${{ needs.check-version.outputs.version }}" > external/claude-code-version.txt
+          git add external/claude-code-version.txt
+          
+          # Only commit and push if changes exist
+          if git diff --staged --quiet; then
+            echo "No changes in version state."
+          else
+            git commit -m "state: update last seen version to ${{ needs.check-version.outputs.version }}"
+            git push origin ci-state
+          fi

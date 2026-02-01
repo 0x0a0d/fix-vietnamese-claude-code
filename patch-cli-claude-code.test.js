@@ -37,7 +37,14 @@ function getVersions(minVersion) {
     }
 }
 
-const VERSIONS = getVersions(MIN_VERSION_TEST);
+const ONLY_VERSION = process.env.ONLY_VERSION;
+const VERSIONS = ONLY_VERSION ? ONLY_VERSION.split(',') : getVersions(MIN_VERSION_TEST);
+
+if (ONLY_VERSION) {
+    console.log(`Running tests ONLY for versions: ${ONLY_VERSION}`);
+} else {
+    console.log(`Running tests for all versions from ${MIN_VERSION_TEST}`);
+}
 
 const CACHE_DIR = path.join(process.cwd(), '.test-cache');
 
@@ -64,21 +71,40 @@ async function downloadFile(url, dest) {
     });
 }
 
+const MAX_DOWNLOADS = 10;
+let activeDownloads = 0;
+const downloadQueue = [];
+
+function processQueue() {
+    if (activeDownloads < MAX_DOWNLOADS && downloadQueue.length > 0) {
+        const { resolve, reject, args } = downloadQueue.shift();
+        activeDownloads++;
+        downloadFile(...args)
+            .then(resolve)
+            .catch(reject)
+            .finally(() => {
+                activeDownloads--;
+                processQueue();
+            });
+    }
+}
+
+async function downloadWithLimit(url, dest) {
+    return new Promise((resolve, reject) => {
+        downloadQueue.push({ resolve, reject, args: [url, dest] });
+        processQueue();
+    });
+}
+
 describe('Claude Code Vietnamese Patch Test', () => {
-    beforeAll(async () => {
-        // download versions if not exists
-        for (const v of VERSIONS) {
-            const url = `https://unpkg.com/@anthropic-ai/claude-code@${v}/cli.js`;
-            const dest = path.join(CACHE_DIR, `cli-${v}.js`);
-            console.log(`Checking version ${v}...`);
-            await downloadFile(url, dest);
-        }
-    }, 60000); // 1 minute timeout for downloads
-
-    it.each(VERSIONS)('should successfully patch version %s', (v) => {
+    it.concurrent.each(VERSIONS)('should successfully patch version %s', async (v) => {
+        const url = `https://unpkg.com/@anthropic-ai/claude-code@${v}/cli.js`;
         const filePath = path.join(CACHE_DIR, `cli-${v}.js`);
+        
+        // Each test downloads its target file with concurrency limit
+        await downloadWithLimit(url, filePath);
+        
         const content = fs.readFileSync(filePath, 'utf-8');
-
         const result = patchContent(content);
 
         expect(result.success, `Patch failed for version ${v}`).toBe(true);
@@ -87,5 +113,5 @@ describe('Claude Code Vietnamese Patch Test', () => {
         // Verify code structure after patch
         expect(result.content).toMatch(/let _vn = \w+\.replace\(\/\\x7f\/g, ""\);/);
         expect(result.content).toContain('.insert(_c)');
-    });
+    }, 300000); // Increased timeout for each test case
 });
