@@ -48,27 +48,48 @@ if (ONLY_VERSION) {
 
 const CACHE_DIR = path.join(process.cwd(), '.test-cache');
 
-async function downloadFile(url, dest) {
+async function downloadFile(version, dest) {
     if (fs.existsSync(dest)) return;
 
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    const cdns = [
+        (v) => `https://cdn.jsdelivr.net/npm/@anthropic-ai/claude-code@${v}/cli.js`,
+        (v) => `https://unpkg.com/@anthropic-ai/claude-code@${v}/cli.js`
+    ];
 
-    return new Promise((resolve, reject) => {
-        const file = fs.createWriteStream(dest);
-        https.get(url, (response) => {
-            if (response.statusCode !== 200) {
-                reject(new Error(`Failed to download: ${response.statusCode}`));
-                return;
+    for (const getUrl of cdns) {
+        const url = getUrl(version);
+        for (let retry = 0; retry < 2; retry++) {
+            try {
+                await new Promise((resolve, reject) => {
+                    fs.mkdirSync(path.dirname(dest), { recursive: true });
+                    const file = fs.createWriteStream(dest);
+                    https.get(url, (response) => {
+                        if (response.statusCode !== 200) {
+                            file.close();
+                            fs.unlink(dest, () => {});
+                            reject(new Error(`Failed to download: ${response.statusCode}`));
+                            return;
+                        }
+                        response.pipe(file);
+                        file.on('finish', () => {
+                            file.close();
+                            resolve();
+                        });
+                    }).on('error', (err) => {
+                        file.close();
+                        fs.unlink(dest, () => {});
+                        reject(err);
+                    });
+                });
+                return; // Download success
+            } catch (err) {
+                console.warn(`Attempt ${retry + 1} failed for ${url}: ${err.message}`);
+                if (retry === 1 && getUrl === cdns[cdns.length - 1]) {
+                    throw err; // Last retry of last CDN failed
+                }
             }
-            response.pipe(file);
-            file.on('finish', () => {
-                file.close();
-                resolve();
-            });
-        }).on('error', (err) => {
-            fs.unlink(dest, () => reject(err));
-        });
-    });
+        }
+    }
 }
 
 const MAX_DOWNLOADS = 10;
@@ -89,20 +110,19 @@ function processQueue() {
     }
 }
 
-async function downloadWithLimit(url, dest) {
+async function downloadWithLimit(version, dest) {
     return new Promise((resolve, reject) => {
-        downloadQueue.push({ resolve, reject, args: [url, dest] });
+        downloadQueue.push({ resolve, reject, args: [version, dest] });
         processQueue();
     });
 }
 
 describe('Claude Code Vietnamese Patch Test', () => {
     it.concurrent.each(VERSIONS)('should successfully patch version %s', async (v) => {
-        const url = `https://unpkg.com/@anthropic-ai/claude-code@${v}/cli.js`;
         const filePath = path.join(CACHE_DIR, `cli-${v}.js`);
         
         // Each test downloads its target file with concurrency limit
-        await downloadWithLimit(url, filePath);
+        await downloadWithLimit(v, filePath);
         
         const content = fs.readFileSync(filePath, 'utf-8');
         const result = patchContent(content);
