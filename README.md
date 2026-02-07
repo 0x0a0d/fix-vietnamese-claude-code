@@ -2,7 +2,7 @@
 
 Fix lỗi gõ tiếng Việt trong Claude Code CLI với các bộ gõ như OpenKey, EVKey, PHTV, Unikey... Hỗ trợ đa nền tảng (macOS và Windows).
 
-**Phiên bản đã test:** Claude Code v2.0.64 → v2.1.36 (Chi tiết tại [CHANGELOG.md](/CHANGELOG.md))
+**Phiên bản đã test:** Claude Code v2.0.64 → v2.1.37 (Chi tiết tại [CHANGELOG.md](/CHANGELOG.md))
 
 ## Vấn đề
 
