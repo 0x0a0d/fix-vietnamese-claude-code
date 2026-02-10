@@ -19,7 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.compare.outputs.changed }}
-      version: ${{ steps.compare.outputs.version }}
+      version_js: ${{ steps.compare.outputs.version_js }}
+      version_bin: ${{ steps.compare.outputs.version_bin }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,50 +30,178 @@ jobs:
       - name: Get current version
         id: old-version
         run: |
-          # Try to get the version from the ci-state branch
           if git rev-parse --verify origin/ci-state >/dev/null 2>&1; then
-            VERSION=$(git show origin/ci-state:external/claude-code-version.txt 2>/dev/null || echo "0.0.0")
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-            echo "Current version (from ci-state): $VERSION"
+            V_JS=$(git show origin/ci-state:external/claude-code-version-js.txt 2>/dev/null || echo "0.0.0")
+            V_BIN=$(git show origin/ci-state:external/claude-code-version-bin.txt 2>/dev/null || echo "0.0.0")
           else
-            echo "version=0.0.0" >> $GITHUB_OUTPUT
-            echo "No previous version found (ci-state branch does not exist)."
+            V_JS="0.0.0"
+            V_BIN="0.0.0"
           fi
+          echo "version_js=$V_JS" >> $GITHUB_OUTPUT
+          echo "version_bin=$V_BIN" >> $GITHUB_OUTPUT
+          echo "Current JS: $V_JS, BIN: $V_BIN"
 
-      - name: Fetch Remote CHANGELOG
-        run: |
-          curl -sL https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md -o remote_changelog.md || (echo "Failed to fetch" && exit 1)
-
-      - name: Extract New Version
+      - name: Extract New Versions
         id: new-version
         run: |
-          VERSION=$(grep -m 1 '^## ' remote_changelog.md | sed 's/## //')
-          if [ -z "$VERSION" ]; then
-            echo "Could not parse version from CHANGELOG"
-            exit 1
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Newest version found: $VERSION"
+          V_JS=$(curl -s https://registry.npmjs.org/@anthropic-ai/claude-code/latest | jq -r '.version')
+          V_BIN=$(curl -s https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/latest | tr -d '\r\n ')
+          
+          if [ -z "$V_JS" ] || [ "$V_JS" = "null" ]; then echo "Failed JS"; exit 1; fi
+          if [ -z "$V_BIN" ] || [ "$V_BIN" = "null" ]; then echo "Failed BIN"; exit 1; fi
+          
+          echo "version_js=$V_JS" >> $GITHUB_OUTPUT
+          echo "version_bin=$V_BIN" >> $GITHUB_OUTPUT
+          echo "New JS: $V_JS, BIN: $V_BIN"
 
       - name: Compare Versions
         id: compare
         run: |
-          OLD="${{ steps.old-version.outputs.version }}"
-          NEW="${{ steps.new-version.outputs.version }}"
+          OLD_JS="${{ steps.old-version.outputs.version_js }}"
+          OLD_BIN="${{ steps.old-version.outputs.version_bin }}"
+          NEW_JS="${{ steps.new-version.outputs.version_js }}"
+          NEW_BIN="${{ steps.new-version.outputs.version_bin }}"
           FORCE="${{ github.event.inputs.force }}"
-          echo "version=$NEW" >> $GITHUB_OUTPUT
-          if [ "$OLD" != "$NEW" ] || [ "$FORCE" = "true" ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "Proceeding with version $NEW (Force: $FORCE)"
-          else
-            echo "changed=false" >> $GITHUB_OUTPUT
-            echo "No version change and force is false."
+          
+          CHANGED="false"
+          if [ "$OLD_JS" != "$NEW_JS" ] || [ "$OLD_BIN" != "$NEW_BIN" ] || [ "$FORCE" = "true" ]; then
+            CHANGED="true"
           fi
+          
+          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
+          echo "version_js=$NEW_JS" >> $GITHUB_OUTPUT
+          echo "version_bin=$NEW_BIN" >> $GITHUB_OUTPUT
+          echo "Proceeding: $CHANGED (JS: $NEW_JS, BIN: $NEW_BIN)"
 
-  update-and-test:
-    name: Run tests and update documentation
+  test-js:
+    name: Test JS (npm)
     needs: check-version
     if: needs.check-version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run JS Tests
+        id: tests
+        env:
+          ONLY_PLATFORM: js
+          ONLY_VERSION: ${{ needs.check-version.outputs.version_js }}
+          SHOW_HELP_OUTPUT: true
+        run: |
+          npm test 2>&1 | tee test_output_js.log
+        continue-on-error: true
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-js
+          path: test_output_js.log
+
+  test-linux:
+    name: Test Linux Binary
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: [linux-arm64, linux-x64, linux-arm64-musl, linux-x64-musl]
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run Binary Tests
+        id: tests
+        env:
+          ONLY_PLATFORM: ${{ matrix.platform }}
+          ONLY_VERSION: ${{ needs.check-version.outputs.version_bin }}
+          SHOW_HELP_OUTPUT: true
+        run: |
+          npm test 2>&1 | tee test_output_${{ matrix.platform }}.log
+        continue-on-error: true
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.platform }}
+          path: test_output_${{ matrix.platform }}.log
+
+  test-macos:
+    name: Test macOS Binary
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        platform: [darwin-arm64, darwin-x64]
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run Binary Tests
+        id: tests
+        env:
+          ONLY_PLATFORM: ${{ matrix.platform }}
+          ONLY_VERSION: ${{ needs.check-version.outputs.version_bin }}
+          SHOW_HELP_OUTPUT: true
+        run: |
+          npm test 2>&1 | tee test_output_${{ matrix.platform }}.log
+        continue-on-error: true
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.platform }}
+          path: test_output_${{ matrix.platform }}.log
+
+  test-windows:
+    name: Test Windows Binary
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run Binary Tests
+        id: tests
+        env:
+          ONLY_PLATFORM: win32-x64
+          ONLY_VERSION: ${{ needs.check-version.outputs.version_bin }}
+          SHOW_HELP_OUTPUT: true
+        run: |
+          npm test 2>&1 | tee test_output_win32-x64.log
+        continue-on-error: true
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-win32-x64
+          path: test_output_win32-x64.log
+
+  finalize:
+    name: Update Documentation and State
+    needs: [check-version, test-js, test-linux, test-macos, test-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout main
@@ -80,110 +209,153 @@ jobs:
         with:
           ref: main
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Download all results
+        uses: actions/download-artifact@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          path: test-results/
+          pattern: test-results-*
+          merge-multiple: true
 
-      - name: Code Match Cache
-        id: code-cache
-        uses: actions/cache@v4
-        with:
-          path: .code-check
-          key: code-v1-${{ hashFiles('patch-cli-claude-code.js', 'patch-cli-claude-code.test.js') }}
-
-      - name: Version Test Cache
-        id: test-cache
-        uses: actions/cache@v4
-        with:
-          path: .test-cache
-          key: test-v1-${{ hashFiles('patch-cli-claude-code.js', 'patch-cli-claude-code.test.js') }}-${{ needs.check-version.outputs.version }}
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Determine Test Scope
-        id: scope
+      - name: Aggregate Logs
         run: |
-          NEW_VERSION="${{ needs.check-version.outputs.version }}"
-          FORCE="${{ github.event.inputs.force }}"
-          
-          if [ "$FORCE" = "true" ]; then
-            echo "mode=FULL" >> $GITHUB_OUTPUT
-            echo "reason=Force re-run requested" >> $GITHUB_OUTPUT
-          elif [ "${{ steps.test-cache.outputs.cache-hit }}" = "true" ]; then
-            echo "mode=SKIP" >> $GITHUB_OUTPUT
-            echo "reason=This exact version and code already passed" >> $GITHUB_OUTPUT
-          elif [ "${{ steps.code-cache.outputs.cache-hit }}" = "true" ]; then
-            echo "mode=PARTIAL" >> $GITHUB_OUTPUT
-            echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-            echo "reason=Code unchanged, testing only new version $NEW_VERSION" >> $GITHUB_OUTPUT
+          cat test-results/*.log > combined_test_output.log
+          # Check for failures (ignoring RESULT_IGNORED)
+          if grep -q "FAILED" combined_test_output.log; then
+            echo "overall_status=FAILED" >> $GITHUB_ENV
           else
-            echo "mode=FULL" >> $GITHUB_OUTPUT
-            echo "reason=Code changed or no previous success found, running full regression" >> $GITHUB_OUTPUT
+            echo "overall_status=PASSED" >> $GITHUB_ENV
           fi
-
-      - name: Run Tests
-        id: tests
-        if: steps.scope.outputs.mode != 'SKIP'
-        env:
-          ONLY_VERSION: ${{ steps.scope.outputs.mode == 'PARTIAL' && steps.scope.outputs.version || '' }}
-        run: |
-          echo "Reason: ${{ steps.scope.outputs.reason }}"
-          if npm test; then
-            echo "status=PASSED" >> $GITHUB_OUTPUT
-            echo "emoji=✅" >> $GITHUB_OUTPUT
-            # Save success marker for this code
-            mkdir -p .code-check
-            echo "PASSED" > .code-check/status
-          else
-            echo "status=FAILED" >> $GITHUB_OUTPUT
-            echo "emoji=❌" >> $GITHUB_OUTPUT
-          fi
-        continue-on-error: true
-
-      - name: Set cache status for skipped tests
-        if: steps.scope.outputs.mode == 'SKIP'
-        run: |
-          echo "status=PASSED" >> $GITHUB_OUTPUT
-          echo "emoji=✅ (Cached)" >> $GITHUB_OUTPUT
-        shell: bash
 
       - name: Update README.md
-        if: steps.tests.outputs.status == 'PASSED'
+        env:
+          V_JS: ${{ needs.check-version.outputs.version_js }}
+          V_BIN: ${{ needs.check-version.outputs.version_bin }}
         run: |
-          NEW_VERSION="${{ needs.check-version.outputs.version }}"
-          # Update "Tested version" line and add reference link if missing
-          sed -i "s/\*\*Phiên bản đã test:\*\* Claude Code v.*/\*\*Phiên bản đã test:\*\* Claude Code v2.0.64 → v$NEW_VERSION (Chi tiết tại [CHANGELOG.md](\/CHANGELOG.md))/" README.md
+          # Use python for complex sed-like replacement to match multi-line format
+          python3 - <<'EOF'
+          import os, re
+          
+          v_js = os.environ.get('V_JS', '')
+          v_bin = os.environ.get('V_BIN', '')
+          readme_path = 'README.md'
+          with open(readme_path, 'r') as f:
+              content = f.read()
+          
+          new_versions = f"**Phiên bản đã test:**\n- npm: v{v_js}\n- binary: v{v_bin}\n(Chi tiết tại [CHANGELOG.md](./CHANGELOG.md))"
+          pattern = r"\*\*Phiên bản đã test:\*\*.*?\(\[CHANGELOG\.md\]\(\./CHANGELOG\.md\)\)"
+          new_content = re.sub(pattern, new_versions, content, flags=re.DOTALL)
+          
+          with open(readme_path, 'w') as f:
+              f.write(new_content)
+          EOF
 
-      - name: Update local CHANGELOG.md
+      - name: Update CHANGELOG.md
+        env:
+          V_JS: ${{ needs.check-version.outputs.version_js }}
+          V_BIN: ${{ needs.check-version.outputs.version_bin }}
         run: |
-          VERSION="${{ needs.check-version.outputs.version }}"
-          STATUS="${{ steps.tests.outputs.status }}"
-          EMOJI="${{ steps.tests.outputs.emoji }}"
           DATE=$(date +'%Y-%m-%d')
           
-          if [ ! -f CHANGELOG.md ]; then
-            echo "# Local Changelog & Testing State" > CHANGELOG.md
-            echo "" >> CHANGELOG.md
-            echo "Automated testing history for new Claude Code versions." >> CHANGELOG.md
-            echo "" >> CHANGELOG.md
-          fi
+          python3 - <<'EOF'
+          import os, re
           
-          # Insert test info after line 4 (header and description)
-          sed -i "4a- [$DATE] Version $VERSION: $STATUS $EMOJI (Automated)" CHANGELOG.md
+          def get_status(platform, version):
+              log_file = 'combined_test_output.log'
+              if not os.path.exists(log_file):
+                  return '❌'
+              
+              with open(log_file, 'r') as f:
+                  log = f.read()
+                  # Need to check version and platform specific result
+                  # The test output has "should successfully patch ... on <platform>"
+                  # and potentially "RESULT_IGNORED: <version>:<platform>"
+                  
+                  if f'RESULT_IGNORED: {version}:{platform}' in log:
+                      return '⚪'
+                  
+                  # Look for the test case result
+                  # If the test passed, Vitest usually shows a checkmark or "PASS"
+                  # This is a bit tricky with combined logs, but we can look for "FAIL" specific to the platform
+                  if f'FAIL  patch-cli-claude-code.test.js > Claude Code Vietnamese Patch Test > Binary Patch Test on {platform}' in log or \
+                     (platform == 'js' and f'FAIL  patch-cli-claude-code.test.js > Claude Code Vietnamese Patch Test > JS Patch Test' in log):
+                      return '❌'
+                  
+                  return '✅'
+
+          filename = 'CHANGELOG.md'
+          header = "| version | date | js | mac-arm64 | mac-x64 | linux-arm64 | linux-x64 | win-x64 |"
+          separator = "| --- | --- | --- | --- | --- | --- | --- | --- |"
+          platforms_map = {
+            'js': 'js', 
+            'mac-arm64': 'darwin-arm64', 
+            'mac-x64': 'darwin-x64', 
+            'linux-arm64': 'linux-arm64', 
+            'linux-x64': 'linux-x64', 
+            'win-x64': 'win32-x64'
+          }
+          
+          platforms_list = ['js', 'mac-arm64', 'mac-x64', 'linux-arm64', 'linux-x64', 'win-x64']
+          version = os.environ.get('V_JS', '')
+          v_bin = os.environ.get('V_BIN', '')
+          date = os.environ.get('DATE', '')
+          if not date:
+              import datetime
+              date = datetime.date.today().strftime('%Y-%m-%d')
+          
+          results = [version, date]
+          for p_key in platforms_list:
+              p = platforms_map[p_key]
+              v = version if p == 'js' else v_bin
+              results.append(get_status(p, v))
+          
+          new_row = "| " + " | ".join(results) + " |"
+          
+          content = []
+          if os.path.exists(filename):
+              with open(filename, 'r') as f:
+                  content = f.readlines()
+          
+          table_start = -1
+          for i, line in enumerate(content):
+              if "| version |" in line and "| js |" in line:
+                  table_start = i
+                  break
+          
+          if table_start == -1:
+              new_content = [
+                  "# Local Changelog & Testing State\n",
+                  "\n",
+                  "Automated testing history for new Claude Code versions.\n",
+                  "\n",
+                  header + "\n",
+                  separator + "\n",
+                  new_row + "\n"
+              ]
+          else:
+              version_exists = False
+              for i in range(table_start + 2, min(table_start + 10, len(content))):
+                  if f"| {version} |" in content[i]:
+                      content[i] = new_row + "\n"
+                      version_exists = True
+                      break
+              
+              if not version_exists:
+                  content.insert(table_start + 2, new_row + "\n")
+              new_content = content
+          
+          with open(filename, 'w') as f:
+              f.writelines(new_content)
+          EOF
 
       - name: Commit and Push Main
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add README.md CHANGELOG.md
-          # Only commit if there are changes
           if git diff --staged --quiet; then
             echo "No changes to commit in main"
           else
-            git commit -m "chore: update test results for Claude Code v${{ needs.check-version.outputs.version }}"
+            git commit -m "chore: update test results for Claude Code v${{ needs.check-version.outputs.version_js }}"
             git push origin main
           fi
 
@@ -191,29 +363,23 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Create a temporary directory for ci-state branch
           WORK_DIR=$(mktemp -d)
           cd $WORK_DIR
           git init
           git remote add origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-          
-          # Try to fetch ci-state branch, create if not exists (orphan)
           if git fetch origin ci-state --depth=1; then
             git checkout ci-state
           else
             git checkout --orphan ci-state
             git rm -rf . --quiet || true
           fi
-          
           mkdir -p external
-          echo "${{ needs.check-version.outputs.version }}" > external/claude-code-version.txt
-          git add external/claude-code-version.txt
-          
-          # Only commit and push if changes exist
+          echo "${{ needs.check-version.outputs.version_js }}" > external/claude-code-version-js.txt
+          echo "${{ needs.check-version.outputs.version_bin }}" > external/claude-code-version-bin.txt
+          git add external/claude-code-version-js.txt external/claude-code-version-bin.txt
           if git diff --staged --quiet; then
             echo "No changes in version state."
           else
-            git commit -m "state: update last seen version to ${{ needs.check-version.outputs.version }}"
+            git commit -m "state: update version to JS:${{ needs.check-version.outputs.version_js }}, BIN:${{ needs.check-version.outputs.version_bin }}"
             git push origin ci-state
           fi

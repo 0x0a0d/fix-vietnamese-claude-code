@@ -1,0 +1,100 @@
+name: Dev Test Trigger
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to test (e.g. 2.0.64). Leave empty for latest."
+        required: false
+        type: string
+      platform:
+        description: "Platform to test"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - js
+          - darwin-arm64
+          - darwin-x64
+          - linux-x64
+          - linux-arm64
+          - linux-x64-musl
+          - linux-arm64-musl
+          - win32-x64
+
+jobs:
+  prep:
+    name: Prepare Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          PLATFORM="${{ github.event.inputs.platform }}"
+          if [ "$PLATFORM" = "all" ]; then
+            # Full list of supported platforms
+            echo 'matrix=["js", "darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "linux-x64-musl", "linux-arm64-musl", "win32-x64"]' >> $GITHUB_OUTPUT
+          else
+            case "$PLATFORM" in
+              js|darwin-arm64|darwin-x64|linux-x64|linux-arm64|linux-x64-musl|linux-arm64-musl|win32-x64)
+                echo "matrix=[\"$PLATFORM\"]" >> $GITHUB_OUTPUT
+                ;;
+              *)
+                echo "::error::Invalid platform: $PLATFORM"
+                exit 1
+                ;;
+            esac
+          fi
+
+  test:
+    name: Test ${{ matrix.platform }}
+    needs: prep
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJson(needs.prep.outputs.matrix) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Get Version
+        id: get-version
+        run: |
+          INPUT_VERSION="${{ github.event.inputs.version }}"
+          CURRENT_PLATFORM="${{ matrix.platform }}"
+          if [ -z "$INPUT_VERSION" ]; then
+            if [ "$CURRENT_PLATFORM" != "js" ]; then
+              echo "Fetching latest version for binary platform ($CURRENT_PLATFORM) from GCS..."
+              VERSION=$(curl -s https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/latest | tr -d '\r\n')
+            else
+              echo "Fetching latest version from NPM..."
+              VERSION=$(curl -s https://registry.npmjs.org/@anthropic-ai/claude-code/latest | jq -r '.version')
+            fi
+          else
+            VERSION=$INPUT_VERSION
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Testing version: $VERSION on platform: $CURRENT_PLATFORM"
+
+      - name: Run Tests
+        env:
+          ONLY_VERSION: ${{ steps.get-version.outputs.version }}
+          ONLY_PLATFORM: ${{ matrix.platform }}
+          SHOW_HELP_OUTPUT: true
+        run: |
+          echo "Testing Platform: $ONLY_PLATFORM"
+          npm test

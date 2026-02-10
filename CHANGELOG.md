@@ -2,12 +2,14 @@
 
 Automated testing history for new Claude Code versions.
 
-- [2026-02-10] Version 2.1.38: PASSED ✅ (Automated)
-- [2026-02-07] Version 2.1.37: PASSED ✅ (Automated)
-- [2026-02-07] Version 2.1.36: PASSED ✅ (Automated)
-- [2026-02-06] Version 2.1.34: PASSED ✅ (Automated)
-- [2026-02-06] Version 2.1.33: PASSED ✅ (Automated)
-- [2026-02-05] Version 2.1.32: PASSED ✅ (Automated)
-- [2026-02-04] Version 2.1.31: PASSED ✅ (Automated)
-- [2026-02-03] Version 2.1.30: PASSED ✅ (Automated)
-- [2026-02-01] Version 2.1.29: PASSED ✅ (Automated)
+| version | date | js | mac-arm64 | mac-x64 | linux-arm64 | linux-x64 | win-x64 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 2.1.38 | 2026-02-10 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2.1.37 | 2026-02-07 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2.1.36 | 2026-02-07 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2.1.34 | 2026-02-06 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2.1.33 | 2026-02-06 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2.1.32 | 2026-02-05 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2.1.31 | 2026-02-04 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2.1.30 | 2026-02-03 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2.1.29 | 2026-02-01 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
