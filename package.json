@@ -1,6 +1,6 @@
 {
   "name": "fix-vietnamese-claude-code",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Fix Vietnamese IME compatibility issues in Claude Code.",
   "bin": {
     "fix-vietnamese-claude-code": "patch-cli-claude-code.js"
