@@ -182,7 +182,8 @@ describe('Claude Code Vietnamese Patch Test', () => {
         'linux-arm64',
         'linux-x64-musl',
         'linux-arm64-musl',
-        'win32-x64'
+        'win32-x64',
+        'win32-arm64'
     ].filter(p => !ONLY_PLATFORM || ONLY_PLATFORM === p);
 
     describe.runIf(BINARY_PLATFORMS.length > 0).each(BINARY_PLATFORMS)('Binary Patch Test on %s', (platform) => {
@@ -222,12 +223,12 @@ describe('Claude Code Vietnamese Patch Test', () => {
                     
                     // Verify by running --help if platform matches current OS
                     const currentPlatform = process.platform + '-' + process.arch;
-                    // Map node platform to our binary platform names if needed
                     let normalizedCurrent = currentPlatform === 'darwin-x64' ? 'darwin-x64' : 
                                             currentPlatform === 'darwin-arm64' ? 'darwin-arm64' :
                                             currentPlatform === 'linux-x64' ? 'linux-x64' :
                                             currentPlatform === 'linux-arm64' ? 'linux-arm64' :
-                                            currentPlatform === 'win32-x64' ? 'win32-x64' : '';
+                                            currentPlatform === 'win32-x64' ? 'win32-x64' :
+                                            currentPlatform === 'win32-arm64' ? 'win32-arm64' : '';
 
                     if (normalizedCurrent.startsWith('linux-')) {
                         try {

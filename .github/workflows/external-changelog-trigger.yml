@@ -174,6 +174,9 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.changed == 'true'
     runs-on: windows-latest
+    strategy:
+      matrix:
+        platform: [win32-x64, win32-arm64]
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -187,17 +190,17 @@ jobs:
       - name: Run Binary Tests
         id: tests
         env:
-          ONLY_PLATFORM: win32-x64
+          ONLY_PLATFORM: ${{ matrix.platform }}
           ONLY_VERSION: ${{ needs.check-version.outputs.version_bin }}
           SHOW_HELP_OUTPUT: true
         run: |
-          npm test 2>&1 | tee test_output_win32-x64.log
+          npm test 2>&1 | tee test_output_${{ matrix.platform }}.log
         continue-on-error: true
       - name: Upload result
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-win32-x64
-          path: test_output_win32-x64.log
+          name: test-results-${{ matrix.platform }}
+          path: test_output_${{ matrix.platform }}.log
 
   finalize:
     name: Update Documentation and State
@@ -231,121 +234,14 @@ jobs:
           V_JS: ${{ needs.check-version.outputs.version_js }}
           V_BIN: ${{ needs.check-version.outputs.version_bin }}
         run: |
-          # Use python for complex sed-like replacement to match multi-line format
-          python3 - <<'EOF'
-          import os, re
-          
-          v_js = os.environ.get('V_JS', '')
-          v_bin = os.environ.get('V_BIN', '')
-          readme_path = 'README.md'
-          with open(readme_path, 'r') as f:
-              content = f.read()
-          
-          new_versions = f"**Phiên bản đã test:**\n- npm: v{v_js}\n- binary: v{v_bin}\n(Chi tiết tại [CHANGELOG.md](./CHANGELOG.md))"
-          pattern = r"\*\*Phiên bản đã test:\*\*.*?\(\[CHANGELOG\.md\]\(\./CHANGELOG\.md\)\)"
-          new_content = re.sub(pattern, new_versions, content, flags=re.DOTALL)
-          
-          with open(readme_path, 'w') as f:
-              f.write(new_content)
-          EOF
+          python3 scripts/update_readme.py "$V_JS" "$V_BIN"
 
       - name: Update CHANGELOG.md
         env:
           V_JS: ${{ needs.check-version.outputs.version_js }}
           V_BIN: ${{ needs.check-version.outputs.version_bin }}
         run: |
-          DATE=$(date +'%Y-%m-%d')
-          
-          python3 - <<'EOF'
-          import os, re
-          
-          def get_status(platform, version):
-              log_file = 'combined_test_output.log'
-              if not os.path.exists(log_file):
-                  return '❌'
-              
-              with open(log_file, 'r') as f:
-                  log = f.read()
-                  # Need to check version and platform specific result
-                  # The test output has "should successfully patch ... on <platform>"
-                  # and potentially "RESULT_IGNORED: <version>:<platform>"
-                  
-                  if f'RESULT_IGNORED: {version}:{platform}' in log:
-                      return '⚪'
-                  
-                  # Look for the test case result
-                  # If the test passed, Vitest usually shows a checkmark or "PASS"
-                  # This is a bit tricky with combined logs, but we can look for "FAIL" specific to the platform
-                  if f'FAIL  patch-cli-claude-code.test.js > Claude Code Vietnamese Patch Test > Binary Patch Test on {platform}' in log or \
-                     (platform == 'js' and f'FAIL  patch-cli-claude-code.test.js > Claude Code Vietnamese Patch Test > JS Patch Test' in log):
-                      return '❌'
-                  
-                  return '✅'
-
-          filename = 'CHANGELOG.md'
-          header = "| version | date | js | mac-arm64 | mac-x64 | linux-arm64 | linux-x64 | win-x64 |"
-          separator = "| --- | --- | --- | --- | --- | --- | --- | --- |"
-          platforms_map = {
-            'js': 'js', 
-            'mac-arm64': 'darwin-arm64', 
-            'mac-x64': 'darwin-x64', 
-            'linux-arm64': 'linux-arm64', 
-            'linux-x64': 'linux-x64', 
-            'win-x64': 'win32-x64'
-          }
-          
-          platforms_list = ['js', 'mac-arm64', 'mac-x64', 'linux-arm64', 'linux-x64', 'win-x64']
-          version = os.environ.get('V_JS', '')
-          v_bin = os.environ.get('V_BIN', '')
-          date = os.environ.get('DATE', '')
-          if not date:
-              import datetime
-              date = datetime.date.today().strftime('%Y-%m-%d')
-          
-          results = [version, date]
-          for p_key in platforms_list:
-              p = platforms_map[p_key]
-              v = version if p == 'js' else v_bin
-              results.append(get_status(p, v))
-          
-          new_row = "| " + " | ".join(results) + " |"
-          
-          content = []
-          if os.path.exists(filename):
-              with open(filename, 'r') as f:
-                  content = f.readlines()
-          
-          table_start = -1
-          for i, line in enumerate(content):
-              if "| version |" in line and "| js |" in line:
-                  table_start = i
-                  break
-          
-          if table_start == -1:
-              new_content = [
-                  "# Local Changelog & Testing State\n",
-                  "\n",
-                  "Automated testing history for new Claude Code versions.\n",
-                  "\n",
-                  header + "\n",
-                  separator + "\n",
-                  new_row + "\n"
-              ]
-          else:
-              version_exists = False
-              for i in range(table_start + 2, min(table_start + 10, len(content))):
-                  if f"| {version} |" in content[i]:
-                      content[i] = new_row + "\n"
-                      version_exists = True
-                      break
-              
-              if not version_exists:
-                  content.insert(table_start + 2, new_row + "\n")
-              new_content = content
-          
-          with open(filename, 'w') as f:
-              f.writelines(new_content)
-          EOF
+          python3 scripts/update_changelog.py "$V_JS" "$V_BIN"
 
       - name: Commit and Push Main
         run: |
