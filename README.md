@@ -3,8 +3,8 @@
 Fix lỗi gõ tiếng Việt trong Claude Code CLI cho các bộ gõ (OpenKey, EVKey, PHTV, Unikey...). Hỗ trợ cả phiên bản **npm** và **binary** (macOS, Windows, Linux).
 
 **Phiên bản đã test:**
-- npm: v2.1.76
-- binary: v2.1.76
+- npm: v2.1.77
+- binary: v2.1.77
 (Chi tiết tại [CHANGELOG.md](./CHANGELOG.md))
 
 ## Cài đặt & Sử dụng
