@@ -309,6 +309,7 @@ if (require.main === module) {
     const finalPath = outputPath || targetPath;
     fs.writeFileSync(finalPath, result.content, 'latin1');
     console.log(`Success: Claude has been patched at ${finalPath}`);
+    console.log('Report issues or give it a star: https://github.com/0x0a0d/fix-vietnamese-claude-code');
 
     // Re-sign binary after patching (required on macOS to pass Gatekeeper)
     if (os.platform() === 'darwin' && !finalPath.endsWith('.js')) {
