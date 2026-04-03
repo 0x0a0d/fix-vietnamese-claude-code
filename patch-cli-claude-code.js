@@ -309,6 +309,17 @@ if (require.main === module) {
     const finalPath = outputPath || targetPath;
     fs.writeFileSync(finalPath, result.content, 'latin1');
     console.log(`Success: Claude has been patched at ${finalPath}`);
+
+    // Re-sign binary after patching (required on macOS to pass Gatekeeper)
+    if (os.platform() === 'darwin' && !finalPath.endsWith('.js')) {
+        try {
+            execSync(`codesign --sign - --force --preserve-metadata=entitlements,requirements,flags "${finalPath}"`, { stdio: 'inherit' });
+            console.log('Re-signed binary successfully.');
+        } catch (e) {
+            console.error('Warning: Re-sign failed:', e.message);
+            console.error(`Run manually: codesign --sign - --force --preserve-metadata=entitlements,requirements,flags "${finalPath}"`);
+        }
+    }
 }
 
 // Export for testing
