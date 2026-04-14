@@ -4,6 +4,7 @@ Automated testing history for new Claude Code versions.
 
 | version | date | js | mac-arm64 | mac-x64 | linux-arm64 | linux-x64 | win-x64 | win-arm64 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2.1.108 | 2026-04-14 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | 2.1.107 | 2026-04-14 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 2.1.105 | 2026-04-14 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 2.1.104 | 2026-04-12 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
