@@ -26,6 +26,7 @@ Description:
 
 function findClaudePath() {
     const isWin = os.platform() === "win32";
+    const home = process.env.HOME || process.env.USERPROFILE || "";
 
     const run = (cmd) => {
         try {
@@ -40,7 +41,84 @@ function findClaudePath() {
 
     const exists = (p) => p && fs.existsSync(p);
 
-    // 1) which / where / bun which
+    // Helper: build the list of @anthropic-ai/claude-code/cli.js candidates
+    // across common install locations. We prefer cli.js over native binaries
+    // because recent native builds (>=2.1.108) are compiled to Bun bytecode
+    // and cannot be patched via text matching.
+    const jsCandidates = [];
+    const addJs = (...parts) => {
+        if (parts.every(Boolean)) {
+            jsCandidates.push(
+              path.join(...parts, "@anthropic-ai", "claude-code", "cli.js")
+            );
+        }
+    };
+
+    // Official Claude Code local installer (`claude migrate-installer`)
+    if (home) {
+        addJs(home, ".claude", "local", "node_modules");
+    }
+
+    // Bun global install
+    const bunInstall =
+      process.env.BUN_INSTALL ||
+      (home ? path.join(home, ".bun") : "");
+    if (bunInstall) {
+        addJs(bunInstall, "install", "global", "node_modules");
+    }
+
+    // npm global (ask npm first)
+    try {
+        const npmRoot = execSync("npm root -g", { stdio: ["ignore", "pipe", "ignore"] })
+          .toString()
+          .trim();
+        if (npmRoot) addJs(npmRoot);
+    } catch (e) { /* npm not available */ }
+
+    // yarn / pnpm global
+    for (const cmd of ["yarn global dir", "pnpm root -g"]) {
+        const p = run(cmd);
+        if (p) addJs(p);
+    }
+
+    // Windows-specific fallbacks
+    if (isWin) {
+        addJs(process.env.APPDATA, "npm", "node_modules");
+        addJs(process.env.LOCALAPPDATA, "npm", "node_modules");
+
+        if (process.env.NVM_HOME) {
+            try {
+                for (const d of fs.readdirSync(process.env.NVM_HOME)) {
+                    addJs(process.env.NVM_HOME, d, "node_modules");
+                }
+            } catch (e) { /* ignore */ }
+        }
+        // Scoop
+        if (process.env.SCOOP) {
+            addJs(process.env.SCOOP, "persist", "nodejs", "bin", "node_modules");
+        }
+    } else {
+        // Unix: nvm versions
+        if (process.env.NVM_DIR) {
+            try {
+                const versionsDir = path.join(process.env.NVM_DIR, "versions", "node");
+                if (fs.existsSync(versionsDir)) {
+                    for (const d of fs.readdirSync(versionsDir)) {
+                        addJs(versionsDir, d, "lib", "node_modules");
+                    }
+                }
+            } catch (e) { /* ignore */ }
+        }
+        // Homebrew
+        addJs("/opt/homebrew/lib/node_modules");
+        addJs("/usr/local/lib/node_modules");
+    }
+
+    for (const p of jsCandidates) {
+        if (exists(p)) return p;
+    }
+
+    // No cli.js found -> fall back to native binary via PATH lookup
     for (const cmd of [
         isWin ? "where claude" : "which claude",
         "bun which claude",
@@ -49,107 +127,29 @@ function findClaudePath() {
         if (exists(p)) {
             if (!isWin) {
                 try {
-                    return execSync(`realpath "${ p }"`).toString().trim();
-                } catch {}
+                    const real = execSync(`realpath "${p}"`).toString().trim();
+                    if (exists(real)) return real;
+                } catch { /* ignore */ }
             }
             return p;
         }
     }
 
-    // 2) Bun global paths
-    const bunInstall =
-      process.env.BUN_INSTALL ||
-      (isWin
-        ? path.join(process.env.USERPROFILE || "", ".bun")
-        : path.join(process.env.HOME || "", ".bun"));
-
-    const bunPaths = [
-        path.join(bunInstall, "bin", isWin ? "claude.exe" : "claude"),
-        path.join(bunInstall, "bin", isWin ? "claude.cmd" : "claude"),
-        path.join(
-          bunInstall,
-          "install",
-          "global",
-          "node_modules",
-          "@anthropic-ai",
-          "claude-code",
-          "cli.js"
-        ),
-    ];
-
-    for (const p of bunPaths) {
-        if (exists(p)) {
-            return p;
+    // Native binary directly in bun/claude install dir
+    if (bunInstall) {
+        for (const bin of [
+            path.join(bunInstall, "bin", isWin ? "claude.exe" : "claude"),
+            path.join(bunInstall, "bin", isWin ? "claude.cmd" : "claude"),
+        ]) {
+            if (exists(bin)) return bin;
         }
     }
 
-    // 3) npm global
-    try {
-        const npmRoot = execSync("npm root -g").toString().trim();
-
-        const cliPath = path.join(
-          npmRoot,
-          "@anthropic-ai",
-          "claude-code",
-          "cli.js"
-        );
-        if (exists(cliPath)) {
-
-            return cliPath;
-        }
-    } catch (e) {
-
+    // Claude Code native installer default location (~/.local/bin/claude[.exe])
+    if (home) {
+        const nativeBin = path.join(home, ".local", "bin", isWin ? "claude.exe" : "claude");
+        if (exists(nativeBin)) return nativeBin;
     }
-
-    // 4) Windows fallbacks
-    if (isWin) {
-
-        const paths = [
-            path.join(
-              process.env.APPDATA || "",
-              "npm",
-              "node_modules",
-              "@anthropic-ai",
-              "claude-code",
-              "cli.js"
-            ),
-            path.join(
-              process.env.LOCALAPPDATA || "",
-              "npm",
-              "node_modules",
-              "@anthropic-ai",
-              "claude-code",
-              "cli.js"
-            ),
-        ];
-
-        if (process.env.NVM_HOME) {
-            try {
-                for (const d of fs.readdirSync(process.env.NVM_HOME)) {
-                    paths.push(
-                      path.join(
-                        process.env.NVM_HOME,
-                        d,
-                        "node_modules",
-                        "@anthropic-ai",
-                        "claude-code",
-                        "cli.js"
-                      )
-                    );
-                }
-            } catch (e) {
-
-            }
-        }
-
-        for (const p of paths) {
-            if (exists(p)) {
-
-                return p;
-            }
-        }
-    }
-
 
     return null;
 }
@@ -214,6 +214,16 @@ ${m2}`.replace(/^\s+/gm, '');
     });
 
     if (matches.length === 0) {
+        // Starting from Claude Code v2.1.108, the native binary bundles the
+        // main module as Bun bytecode, so the JS source text is no longer
+        // present and cannot be patched. Detect that and surface a clear
+        // error so users know to switch to the npm-installed cli.js.
+        if (binaryContent.includes('// @bun @bytecode')) {
+            return {
+                success: false,
+                message: 'Patch failed: this native binary is compiled to Bun bytecode (Claude Code >= 2.1.108) and cannot be patched as text. Install the npm version and re-run:\n  npm install -g @anthropic-ai/claude-code\n  npx fix-vietnamese-claude-code'
+            };
+        }
         return { success: false, message: 'Patch failed: no match found' };
     }
 
