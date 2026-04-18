@@ -6,11 +6,12 @@ const path = require('path');
 const os = require('os');
 
 const DORK = '/* _0x0a0d_ime_fix_ */';
+const FIXED_VERSION = '2.1.108';
 
 function usage() {
     console.log(`
 Usage:
-  fix-claude-code-vn [options]
+  fix-vietnamese-claude-code [options]
 
 Options:
   -f, --file <_path_>   Path to cli.js or claude file
@@ -21,7 +22,60 @@ Options:
 Description:
   This script patches Claude Code CLI tool to fix Vietnamese IME issues.
   If no file is specified, it will try to find it automatically.
+!!!Note!!!
+  CLAUDE CODE v${FIXED_VERSION}+ DOESN'T NEED TO PATCH ANYMORE.
     `);
+}
+
+function parseVersion(version) {
+    const match = String(version || '').trim().match(/^(\d+)\.(\d+)\.(\d+)$/);
+    if (!match) {
+        return null;
+    }
+
+    return match.slice(1).map(Number);
+}
+
+function compareVersions(left, right) {
+    const leftParts = parseVersion(left);
+    const rightParts = parseVersion(right);
+
+    if (!leftParts || !rightParts) {
+        return null;
+    }
+
+    for (let i = 0; i < 3; i++) {
+        if (leftParts[i] > rightParts[i]) {
+            return 1;
+        }
+        if (leftParts[i] < rightParts[i]) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+function extractClaudeVersion(fileContent) {
+    const versionMatch = fileContent.match(/\/\/ Version:\s*(\d+\.\d+\.\d+)\b/);
+    return versionMatch ? versionMatch[1] : null;
+}
+
+function isVersionAtLeast(version, minVersion) {
+    const comparison = compareVersions(version, minVersion);
+    return comparison !== null && comparison >= 0;
+}
+
+function buildNoMatchMessage(version) {
+    let message = 'Patch thất bại: không tìm thấy đoạn mã phù hợp để áp dụng bản vá.';
+
+    if (version && compareVersions(version, FIXED_VERSION) < 0) {
+        message += ` Đã phát hiện Claude Code v${version}. Từ v${FIXED_VERSION} trở lên đã được fix sẵn, bạn nên nâng cấp thay vì tiếp tục phụ thuộc vào patch.`;
+    } else if (!version) {
+        message += ` Nếu bạn đang dùng bản thấp hơn v${FIXED_VERSION}, nên nâng cấp thay vì tiếp tục phụ thuộc vào patch này.`;
+    }
+
+    return message;
 }
 
 function findClaudePath() {
@@ -155,7 +209,17 @@ function findClaudePath() {
 }
 
 // stolen fixed solution from manhit96/claude-code-vietnamese-fix
-function patchContentJs(fileContent) {
+function patchContentJs(fileContent, detectedVersion = extractClaudeVersion(fileContent)) {
+    if (isVersionAtLeast(detectedVersion, FIXED_VERSION)) {
+        return {
+            success: true,
+            alreadyPatched: false,
+            alreadyFixedUpstream: true,
+            version: detectedVersion,
+            message: `Claude Code v${detectedVersion} đã được fix sẵn lỗi gõ tiếng Việt. Không cần patch nữa.`,
+        };
+    }
+
     if (fileContent.includes(DORK)) {
         return { success: true, alreadyPatched: true };
     }
@@ -181,13 +245,23 @@ ${m2}
     });
 
     if (newContent.length === fileContent.length) {
-        return { success: false, message: 'Patch failed: no match found' };
+        return { success: false, version: detectedVersion, message: buildNoMatchMessage(detectedVersion) };
     }
 
-    return { success: true, alreadyPatched: false, content: newContent };
+    return { success: true, alreadyPatched: false, version: detectedVersion, content: newContent };
 }
 
-function patchContentBinary(binaryContent) {
+function patchContentBinary(binaryContent, detectedVersion = extractClaudeVersion(binaryContent)) {
+    if (isVersionAtLeast(detectedVersion, FIXED_VERSION)) {
+        return {
+            success: true,
+            alreadyPatched: false,
+            alreadyFixedUpstream: true,
+            version: detectedVersion,
+            message: `Claude Code v${detectedVersion} đã được fix sẵn lỗi gõ tiếng Việt. Không cần patch nữa.`,
+        };
+    }
+
     if (binaryContent.includes(DORK)) {
         return { success: true, alreadyPatched: true };
     }
@@ -214,7 +288,7 @@ ${m2}`.replace(/^\s+/gm, '');
     });
 
     if (matches.length === 0) {
-        return { success: false, message: 'Patch failed: no match found' };
+        return { success: false, version: detectedVersion, message: buildNoMatchMessage(detectedVersion) };
     }
 
     // now from index, we must look back for `\x00// @bun `
@@ -240,7 +314,7 @@ ${m2}`.replace(/^\s+/gm, '');
                     if (found) {
                         matches[i].found = true;
                         break;
-                    };
+                    }
                 }
             }
         }
@@ -250,10 +324,10 @@ ${m2}`.replace(/^\s+/gm, '');
     }
 
     if (matches.every(m => !m.found)) {
-        return { success: false, message: 'Patch failed: pragma' };
+        return { success: false, message: 'Patch thất bại: không xử lý được pragma của binary.' };
     }
 
-    return { success: true, alreadyPatched: false, content: binaryContent };
+    return { success: true, alreadyPatched: false, version: detectedVersion, content: binaryContent };
 }
 
 // Main execution
@@ -281,20 +355,37 @@ if (require.main === module) {
     }
 
     if (!targetPath || !fs.existsSync(targetPath)) {
-        console.error('Error: Could not find Claude Code CLI.');
-        if (targetPath) console.error(`Path tried: ${targetPath}`);
+        console.error('Lỗi: không tìm thấy Claude Code CLI.');
+        if (targetPath) console.error(`Đường dẫn đã thử: ${targetPath}`);
         usage();
         process.exit(1);
     }
 
-    console.log(`Target: ${targetPath}`);
+    console.log(`File mục tiêu: ${targetPath}`);
+
+    const originalContent = fs.readFileSync(targetPath, 'latin1');
+    const detectedVersion = extractClaudeVersion(originalContent);
+
+    if (detectedVersion) {
+        console.log(`Phiên bản Claude Code phát hiện được: ${detectedVersion}`);
+    }
+
+    if (detectedVersion && compareVersions(detectedVersion, FIXED_VERSION) < 0) {
+        console.log(`Lưu ý: Claude Code v${detectedVersion} cũ hơn v${FIXED_VERSION}.`);
+        console.log(`Từ v${FIXED_VERSION} trở lên đã được fix sẵn lỗi gõ tiếng Việt; bạn nên nâng cấp trước khi dùng patch này.`);
+    }
 
     const result = targetPath.endsWith('.js')
-      ? patchContentJs(fs.readFileSync(targetPath, 'latin1'))
-      : patchContentBinary(fs.readFileSync(targetPath, 'latin1'));
+      ? patchContentJs(originalContent, detectedVersion)
+      : patchContentBinary(originalContent, detectedVersion);
+
+    if (result.alreadyFixedUpstream) {
+        console.log(result.message);
+        process.exit(0);
+    }
 
     if (result.alreadyPatched) {
-        console.log('Claude is already patched for Vietnamese IME.');
+        console.log('Claude hiện đã được patch cho gõ tiếng Việt.');
         process.exit(0);
     }
 
@@ -304,23 +395,23 @@ if (require.main === module) {
     }
 
     if (isDryRun) {
-        console.log('Dry run: patch applied successfully (not saved).');
+        console.log('Dry run: áp dụng patch thành công, chưa ghi ra file.');
         process.exit(0);
     }
 
     const finalPath = outputPath || targetPath;
     fs.writeFileSync(finalPath, result.content, 'latin1');
-    console.log(`Success: Claude has been patched at ${finalPath}`);
-    console.log('Report issues or give it a star: https://github.com/0x0a0d/fix-vietnamese-claude-code');
+    console.log(`Thành công: đã patch Claude Code tại ${finalPath}`);
+    console.log('Báo lỗi hoặc ủng hộ dự án tại: https://github.com/0x0a0d/fix-vietnamese-claude-code');
 
     // Re-sign binary after patching (required on macOS to pass Gatekeeper)
     if (os.platform() === 'darwin' && !finalPath.endsWith('.js')) {
         try {
             execSync(`codesign --sign - --force --preserve-metadata=entitlements,requirements,flags "${finalPath}"`, { stdio: 'inherit' });
-            console.log('Re-signed binary successfully.');
+            console.log('Ký lại binary thành công.');
         } catch (e) {
-            console.error('Warning: Re-sign failed:', e.message);
-            console.error(`Run manually: codesign --sign - --force --preserve-metadata=entitlements,requirements,flags "${finalPath}"`);
+            console.error('Cảnh báo: ký lại binary thất bại:', e.message);
+            console.error(`Hãy chạy thủ công: codesign --sign - --force --preserve-metadata=entitlements,requirements,flags "${finalPath}"`);
         }
     }
 }
@@ -328,6 +419,9 @@ if (require.main === module) {
 // Export for testing
 module.exports = {
     DORK,
+    FIXED_VERSION,
+    compareVersions,
+    extractClaudeVersion,
     patchContentJs,
     patchContentBinary,
 };

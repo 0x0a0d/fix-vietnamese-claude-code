@@ -1,6 +1,12 @@
+# ⚠️ Project Deprecated
+> [!IMPORTANT]
+> Từ Claude Code `v2.1.108`, Anthropic đã fix sẵn việc gõ tiếng Việt trong Claude Code.
+> Nếu bạn đang dùng `v2.1.108` trở lên thì không cần chạy patch này nữa.
+> Nếu bạn đang dùng bản thấp hơn `v2.1.108`, nên ưu tiên upgrade lên bản mới thay vì tiếp tục dùng patch.
+
 # Claude Code Vietnamese IME Fix
 
-Fix lỗi gõ tiếng Việt trong Claude Code CLI cho các bộ gõ (OpenKey, EVKey, PHTV, Unikey...). Hỗ trợ cả phiên bản **npm** và **binary** (macOS, Windows, Linux).
+Bản vá này dành cho các phiên bản Claude Code cũ chưa có fix upstream cho gõ tiếng Việt. Hỗ trợ cả bản **npm** và **binary** (macOS, Windows, Linux), tương thích với các bộ gõ như OpenKey, EVKey, PHTV, Unikey...
 
 **Phiên bản đã test:**
 - npm: v2.1.114
@@ -9,7 +15,7 @@ Fix lỗi gõ tiếng Việt trong Claude Code CLI cho các bộ gõ (OpenKey, E
 
 ## Cài đặt & Sử dụng
 
-Gõ lệnh sau trong terminal để áp dụng bản vá:
+Chỉ dùng lệnh sau nếu bạn vẫn đang ở Claude Code `< 2.1.108` và chưa thể nâng cấp ngay:
 
 ```bash
 npx fix-vietnamese-claude-code
@@ -30,7 +36,9 @@ npx fix-vietnamese-claude-code -f "/đường/dẫn/đến/claude"
 ```
 
 ## Lưu ý
-- **Cập nhật:** Bạn cần chạy lại lệnh patch mỗi khi Claude Code cập nhật phiên bản mới.
+- **Claude Code >= 2.1.108:** Không cần patch nữa.
+- **Claude Code < 2.1.108:** Nên ưu tiên upgrade lên `2.1.108` hoặc mới hơn.
+- **Nếu vẫn dùng patch cho bản cũ:** Bạn cần chạy lại lệnh patch mỗi khi Claude Code cập nhật sang một phiên bản cũ khác.
 - **Môi trường:** Đã kiểm tra tốt trên Windows (CMD/PowerShell), macOS và Linux.
 
 ## Phát triển

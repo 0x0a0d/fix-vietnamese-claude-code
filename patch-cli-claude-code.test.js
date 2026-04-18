@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import https from 'https';
-import { patchContentJs, patchContentBinary, DORK } from './patch-cli-claude-code.js';
+import { patchContentJs, patchContentBinary, FIXED_VERSION, compareVersions } from './patch-cli-claude-code.js';
 import { execSync } from 'child_process';
 
 const MIN_VERSION_TEST = '2.0.64';
@@ -145,6 +145,12 @@ describe('Claude Code Vietnamese Patch Test', () => {
             try {
                 result = patchContentJs(content);
                 if (result.success) {
+                    if (compareVersions(v, FIXED_VERSION) >= 0) {
+                        expect(result.alreadyFixedUpstream, `JS version ${v} should be treated as already fixed upstream`).toBe(true);
+                        expect(result.content).toBeUndefined();
+                        return;
+                    }
+
                     fs.writeFileSync(patchedPath, result.content, 'latin1');
                     // Verify by running node patchedPath --help
                     try {
@@ -216,14 +222,20 @@ describe('Claude Code Vietnamese Patch Test', () => {
             try {
                 result = patchContentBinary(content);
                 if (result.success) {
+                    if (compareVersions(v, FIXED_VERSION) >= 0) {
+                        expect(result.alreadyFixedUpstream, `Binary version ${v} on ${platform} should be treated as already fixed upstream`).toBe(true);
+                        expect(result.content).toBeUndefined();
+                        return;
+                    }
+
                     fs.writeFileSync(patchedPath, result.content, 'latin1');
                     if (!platform.startsWith('win')) {
                         fs.chmodSync(patchedPath, 0o755);
                     }
-                    
+
                     // Verify by running --help if platform matches current OS
                     const currentPlatform = process.platform + '-' + process.arch;
-                    let normalizedCurrent = currentPlatform === 'darwin-x64' ? 'darwin-x64' : 
+                    let normalizedCurrent = currentPlatform === 'darwin-x64' ? 'darwin-x64' :
                                             currentPlatform === 'darwin-arm64' ? 'darwin-arm64' :
                                             currentPlatform === 'linux-x64' ? 'linux-x64' :
                                             currentPlatform === 'linux-arm64' ? 'linux-arm64' :
